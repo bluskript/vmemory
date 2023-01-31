@@ -30,6 +30,8 @@ use winapi::um::processthreadsapi::TerminateProcess;
 #[cfg(target_family = "windows")]
 use winapi::um::winnt::HANDLE;
 
+use std::error::Error;
+use std::fmt;
 use std::mem::MaybeUninit;
 
 #[cfg(target_os = "macos")]
@@ -39,6 +41,15 @@ use nix::libc::{
 };
 
 use std::ffi::CString;
+
+#[derive(Debug, Clone)]
+pub struct ReadMemoryError(u32);
+
+impl fmt::Display for ReadMemoryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "reading memory failed with error code {}", self.0)
+    }
+}
 
 //
 // A handle (or mach port on macOS) to designate access to the task/process
@@ -497,25 +508,33 @@ impl ProcessMemory {
     /// # Panics
     /// If the process fails to read from memory, this function will panic.
     #[must_use]
-    pub fn read_memory(&self, mut address: usize, size: usize, offset: bool) -> Vec<u8> {
+    pub fn read_memory(
+        &self,
+        mut address: usize,
+        size: usize,
+        offset: bool,
+    ) -> Result<Vec<u8>, ReadMemoryError> {
         if offset {
             address += self.base_address;
         }
 
-        #[cfg(target_vendor = "unknown")]
         {
-            memory_linux::read_memory(self.pid, address, size).unwrap()
-        }
+            #[cfg(target_vendor = "unknown")]
+            {
+                memory_linux::read_memory(self.pid, address, size)
+            }
 
-        #[cfg(target_family = "windows")]
-        {
-            memory_windows::read_memory(self.handle as _, address, size).unwrap()
-        }
+            #[cfg(target_family = "windows")]
+            {
+                memory_windows::read_memory(self.handle as _, address, size)
+            }
 
-        #[cfg(target_os = "macos")]
-        {
-            memory_darwin::read_memory(self.handle as _, address, size).unwrap()
+            #[cfg(target_os = "macos")]
+            {
+                memory_darwin::read_memory(self.handle as _, address, size)
+            }
         }
+        .map_err(|e| ReadMemoryError(e))
     }
 
     /// Resume the process by resuming the first thread (Windows)
